@@ -9,7 +9,7 @@ CONSENT_VERSION_SHORT = "es-tg-v4-short"
 # Real data from the channel (Oct 2026). Override with env PROOF_LINE / RESULTS_LINE ("-" turns a line off).
 # RESULTS_LINE changes every month: update it in the env, not in code.
 DEFAULT_PROOF_LINE = "+2.800 aficionados en Telegram"
-DEFAULT_RESULTS_LINE = "Octubre: 15 aciertos y 4 fallos publicados · balance +572 € (declarado por el canal, no auditado)"
+DEFAULT_RESULTS_LINE = "Octubre: 15 aciertos y 4 fallos publicados · balance +572 € según el informe del canal"
 
 # Separate paid-deposit offer. Shown only after the number is saved, and only when BONUS_URL is set.
 BONUS_BLOCK = (

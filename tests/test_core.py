@@ -113,7 +113,7 @@ def test_proof_defaults_and_switch_off(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     cfg = config.load_config()
     assert cfg.proof_line == texts.DEFAULT_PROOF_LINE and "+2.800" in cfg.proof_line
-    assert "+572" in cfg.results_line and "no auditado" in cfg.results_line     # the number never travels without its caveat
+    assert "+572" in cfg.results_line and "informe del canal" in cfg.results_line   # the number always names its source
     assert cfg.bonus_url == ""                                                    # the bonus is off until a link is given
     monkeypatch.setenv("RESULTS_LINE", "-")
     monkeypatch.setenv("PROOF_LINE", "Más de 3.000 aficionados")
