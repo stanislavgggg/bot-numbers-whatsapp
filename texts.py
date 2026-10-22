@@ -1,7 +1,31 @@
 """All user-facing copy lives here. Edit freely (Spanish by default)."""
 
 # Bump this whenever the disclaimer wording changes: it is stored with every lead as proof of what was accepted.
+# DISCLAIMER=full is the long legal block (es-tg-v3); DISCLAIMER=short is one compact consent line (es-tg-v4-short).
 CONSENT_VERSION = "es-tg-v3"
+CONSENT_VERSION_SHORT = "es-tg-v4-short"
+
+
+# Real data from the channel (Oct 2026). Override with env PROOF_LINE / RESULTS_LINE ("-" turns a line off).
+# RESULTS_LINE changes every month: update it in the env, not in code.
+DEFAULT_PROOF_LINE = "+2.800 aficionados en Telegram"
+DEFAULT_RESULTS_LINE = "Octubre: 15 aciertos y 4 fallos publicados · balance +572 € (declarado por el canal, no auditado)"
+
+# Separate paid-deposit offer. Shown only after the number is saved, and only when BONUS_URL is set.
+BONUS_BLOCK = (
+    "\n\n🎁 <b>Oferta aparte (con depósito, +18)</b>\n"
+    "Bono de bienvenida CaptainsBet: <b>100% extra hasta 100 €</b> en tu primer depósito "
+    "(solo nuevos usuarios, mínimo 5 €). Rollover x5, combinadas de 3+ selecciones, "
+    "cuota 1,50-10,00, validez 3 días. Consulta las condiciones vigentes del operador.\n"
+    '<a href="{url}">Consultar oferta en Telegram</a>\n'
+    "El pack sigue siendo gratis: este bono es otra promoción y requiere registrarte y depositar."
+)
+BTN_VIEW_CHANNEL = "📊 Ver el canal y sus informes"
+
+
+def consent_version(level: str) -> str:
+    return CONSENT_VERSION if level == "full" else CONSENT_VERSION_SHORT
+
 
 CLUBS = {
     "rm": "Real Madrid",
@@ -10,11 +34,23 @@ CLUBS = {
     "otro": "Otro equipo",
 }
 
-# {brand} = BRAND_NAME (who sends the messages), {privacy} = privacy link line (may be empty),
-# {trust_extra} = optional extra trust lines from FREQUENCY_LINE / PROOF_LINE (may be empty).
-# Copy mirrors the landing https://espack.lovable.app so what people accept matches what they get.
-# Structure: hook -> what is inside -> what it looks like -> why it is safe -> consent -> legal line.
-WELCOME = (
+# {brand} = BRAND_NAME (who sends the messages), {privacy} = privacy link (may be empty),
+# {trust_extra} = optional extra lines from FREQUENCY_LINE / PROOF_LINE (may be empty).
+# Offer first, consent last. SHORT keeps only what the "Acepto" tap needs to mean something: WhatsApp, sender, opt-out, 18+.
+WELCOME_SHORT = (
+    "⚽ <b>Pack de pronósticos. Gratis, en tu WhatsApp.</b>\n\n"
+    "Qué apostar, a qué cuota y por qué. Fútbol con análisis, no solo un nombre de equipo:\n"
+    "• <b>El pronóstico</b>: partido y apuesta propuesta.\n"
+    "• <b>La cuota</b>: el precio de la apuesta, sin rodeos.\n"
+    "• <b>El porqué</b>: las claves que justifican el pick.\n"
+    "{trust_extra}\n"
+    "✅ Gratis · sin tarjeta · sin depósito · sin cuenta\n\n"
+    "<i>Al pulsar «Acepto» recibirás pronósticos y ofertas de {brand} por WhatsApp. "
+    "Baja con /borrar. +18{privacy}</i>"
+)
+
+# Long legal version (DISCLAIMER=full). Copy mirrors the landing https://espack.lovable.app.
+WELCOME_FULL = (
     "⚽ <b>Pack de pronósticos. Gratis, en tu WhatsApp.</b>\n\n"
     "Fútbol con análisis, no solo un nombre de equipo. En cada pack:\n"
     "• <b>El pronóstico</b>: partido y apuesta propuesta.\n"
@@ -29,6 +65,8 @@ WELCOME = (
     "pronósticos y ofertas de {brand} por WhatsApp. Puedes darte de baja cuando quieras con /borrar.{privacy}\n\n"
     "18+ · Ningún pronóstico garantiza un resultado. Juega con responsabilidad. Solo para mayores de 18 años."
 )
+WELCOME = WELCOME_FULL  # backwards-compatible name
+PRIVACY_INLINE = ' · <a href="{url}">Privacidad</a>'
 PRIVACY_LINE = '\n<a href="{url}">Política de privacidad</a>'
 BRAND_FALLBACK = "Apuestas Guru"
 
@@ -50,11 +88,16 @@ BAD_PHONE = (
 NOT_OWN_CONTACT = "Comparte tu propio número, por favor (o escríbelo a mano)."
 
 # {brand} = who will write to the person on WhatsApp (so the first message is not a stranger).
-DONE = (
+DONE_SHORT = (
+    "🎉 <b>¡Listo!</b> Tu pack llegará a <b>{phone}</b> por WhatsApp, de parte de <b>{brand}</b>.\n\n"
+    "Cuando lo recibas, guarda el contacto para no perderte nada.{bonus}"
+)
+DONE_FULL = (
     "🎉 <b>¡Listo!</b> Tu pack llegará a <b>{phone}</b> por WhatsApp, de parte de <b>{brand}</b>.\n\n"
     "Cuando lo recibas, guarda el contacto para no perderte nada. Si cambias de idea: /borrar.\n\n"
-    "18+ · Juega con responsabilidad."
+    "18+ · Juega con responsabilidad.{bonus}"
 )
+DONE = DONE_FULL  # backwards-compatible name
 ASK_CLUB = "⭐ <b>Opcional, 1 toque:</b> ¿de qué equipo eres? Así podemos enviarte pronósticos de tu equipo."
 CLUB_THANKS = "✅ {club}. ¡Gracias!"
 BTN_CHANNEL = "⚽ Ver canal"

@@ -75,13 +75,17 @@ def test_full_flow(tmp_path):
         # the disclaimer must name WhatsApp explicitly and offer the explicit opt-in button
         welcome = session.sent[0][1]
         assert "WhatsApp" in welcome["text"] and "acepto" in welcome["text"].lower()
-        assert "Ningún pronóstico garantiza un resultado" in welcome["text"] and "mayores de 18" in welcome["text"]
+        # short mode keeps only what makes the tap meaningful: sender, WhatsApp, opt-out, 18+, privacy link
+        assert "Apuestas Guru" in welcome["text"] and "/borrar" in welcome["text"] and "+18" in welcome["text"]
+        assert "Ningún pronóstico garantiza" not in welcome["text"]
         assert "https://example.com/privacy" in welcome["text"]
         assert "Tengo 18+ y acepto" in str(welcome["reply_markup"])
-        # offer part: sample of the pack + free/no-card line; CTA button is on its own row
-        assert "ejemplo ilustrativo" in welcome["text"] and "sin tarjeta, sin depósito" in welcome["text"]
-        assert len(welcome["reply_markup"]["inline_keyboard"]) == 2
-        # no optional trust lines unless configured
+        # offer part: what is inside + free/no-card line; no invented sample pick any more
+        assert "Qué apostar, a qué cuota y por qué" in welcome["text"] and "sin tarjeta" in welcome["text"]
+        assert "Equipo A" not in welcome["text"]
+        # CTA, then "see the channel" (check before giving a number), then "No"; trust lines only when configured
+        kb = welcome["reply_markup"]["inline_keyboard"]
+        assert len(kb) == 3 and "canal" in kb[1][0]["text"] and kb[1][0]["url"] == "https://t.me/example"
         assert "👥" not in welcome["text"]
         # nothing is stored before the number is given
         assert (await db.stats())["total"] == 0
@@ -105,7 +109,7 @@ def test_full_flow(tmp_path):
         assert dict(s["by_club"]) == {"Barça": 1}
         lead = (await db.all_leads())[0]
         assert lead["phone"] == "+34612345678" and lead["consent"] == 1 and lead["age_confirmed"] == 1
-        assert lead["consent_version"] == "es-tg-v3" and lead["consent_at"]
+        assert lead["consent_version"] == "es-tg-v4-short" and lead["consent_at"]
 
         # someone else's contact must be rejected
         await feed(msg(7, "/start"))
@@ -216,3 +220,59 @@ def test_csv_formula_injection_is_neutralised():
     assert botmod.csv_safe("first_name", "Stan") == "Stan"
     assert botmod.csv_safe("phone", "+34612345678") == "+34612345678"   # validated E.164 stays as is
     assert botmod.csv_safe("consent", 1) == 1
+
+
+def test_full_disclaimer_mode_keeps_the_legal_block(tmp_path):
+    async def run():
+        cfg, db, session, bot, dp = _setup(tmp_path, privacy_url="https://example.com/privacy", disclaimer="full")
+        feed = lambda u: dp.feed_update(bot, u)
+        await feed(msg(1, "/start"))
+        text = session.sent[0][1]["text"]
+        assert "Ningún pronóstico garantiza un resultado" in text and "mayores de 18" in text
+        assert "ejemplo ilustrativo" in text and "https://example.com/privacy" in text
+        await feed(cbq(2, "age:yes"))
+        await feed(msg(3, "612 345 678"))
+        assert (await db.all_leads())[0]["consent_version"] == "es-tg-v3"        # the version records what was shown
+        assert any("Juega con responsabilidad" in str(d.get("text", "")) for _, d in session.sent)
+    asyncio.run(run())
+
+
+def test_short_mode_is_much_lighter_than_full():
+    short = botmod.welcome_text(Config(bot_token="1:x", privacy_url="https://e.com/p"))
+    full = botmod.welcome_text(Config(bot_token="1:x", privacy_url="https://e.com/p", disclaimer="full"))
+    assert len(short) < len(full) - 150
+    import re
+    for tag in ("b", "i", "blockquote", "a"):
+        assert len(re.findall(rf"<{tag}[ >]", short)) == len(re.findall(rf"</{tag}>", short)), tag
+
+
+def test_real_proof_lines_and_channel_button():
+    cfg = Config(bot_token="1:x", proof_line="+2.800 aficionados en Telegram",
+                 results_line="Octubre en el canal: 15 aciertos y 4 fallos publicados, balance +572 € (declarado, no auditado)")
+    text = botmod.welcome_text(cfg)
+    assert "📊 Octubre en el canal: 15 aciertos y 4 fallos" in text and "no auditado" in text
+    assert "👥 +2.800 aficionados en Telegram" in text
+    assert text.index("📊") < text.index("👥") < text.index("✅ Gratis")     # proof first, then the free line, consent last
+    assert text.index("✅ Gratis") < text.index("Al pulsar")
+    assert len(botmod.kb_age(Config(bot_token="1:x")).inline_keyboard) == 2   # no channel url, no extra button
+    assert len(botmod.kb_age(Config(bot_token="1:x", channel_url="https://t.me/c")).inline_keyboard) == 3
+
+
+def test_bonus_block_only_when_url_set(tmp_path):
+    async def run():
+        for url, expected in (("", False), ("https://t.me/ApuestasGuruES/123", True)):
+            botmod.router._parent_router = None
+            cfg, db, session, bot, dp = _setup(tmp_path, bonus_url=url)
+            feed = lambda u: dp.feed_update(bot, u)
+            await feed(msg(1, "/start"))
+            await feed(cbq(2, "age:yes"))
+            await feed(msg(3, "612 345 678"))
+            done = [d["text"] for n, d in session.sent if n == "SendMessage" and "Listo" in str(d.get("text", ""))][-1]
+            assert ("CaptainsBet" in done) is expected
+            if expected:
+                # separated from the free pack, conditions visible, link present, still before the optional club question
+                assert "Oferta aparte" in done and "100% extra hasta 100 €" in done
+                assert "Rollover x5" in done and "3 días" in done and "El pack sigue siendo gratis" in done
+                assert url in done
+            (tmp_path / "x.db").unlink(missing_ok=True)
+    asyncio.run(run())

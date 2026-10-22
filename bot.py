@@ -67,11 +67,14 @@ def csv_safe(col: str, value):
 
 
 # ---------- keyboards ----------
-def kb_age() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def kb_age(cfg: Config | None = None) -> InlineKeyboardMarkup:
+    rows = [
         [InlineKeyboardButton(text=T.BTN_AGE_YES, callback_data="age:yes")],
         [InlineKeyboardButton(text=T.BTN_AGE_NO, callback_data="age:no")],
-    ])
+    ]
+    if cfg is not None and cfg.channel_url:  # lets people check the channel before giving a number (no extra step)
+        rows.insert(1, [InlineKeyboardButton(text=T.BTN_VIEW_CHANNEL, url=cfg.channel_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_clubs(cfg: Config | None = None) -> InlineKeyboardMarkup:
@@ -98,8 +101,12 @@ def kb_phone() -> ReplyKeyboardMarkup:
 
 # ---------- helpers ----------
 def welcome_text(cfg: Config) -> str:
-    privacy = T.PRIVACY_LINE.format(url=html.escape(cfg.privacy_url, quote=True)) if cfg.privacy_url else ""
-    return T.WELCOME.format(brand=brand_name(cfg), privacy=privacy, trust_extra=trust_extra(cfg))
+    url = html.escape(cfg.privacy_url, quote=True)
+    if cfg.disclaimer == "full":
+        privacy = T.PRIVACY_LINE.format(url=url) if cfg.privacy_url else ""
+        return T.WELCOME_FULL.format(brand=brand_name(cfg), privacy=privacy, trust_extra=trust_extra(cfg))
+    privacy = T.PRIVACY_INLINE.format(url=url) if cfg.privacy_url else ""
+    return T.WELCOME_SHORT.format(brand=brand_name(cfg), privacy=privacy, trust_extra=trust_extra(cfg))
 
 
 def brand_name(cfg: Config) -> str:
@@ -110,10 +117,12 @@ def brand_name(cfg: Config) -> str:
 def trust_extra(cfg: Config) -> str:
     """Optional trust lines (message frequency, social proof). Empty unless set in env; escaped for HTML."""
     lines = []
-    if cfg.frequency_line:
-        lines.append("✅ " + html.escape(cfg.frequency_line, quote=False))
+    if cfg.results_line:
+        lines.append("📊 " + html.escape(cfg.results_line, quote=False))
     if cfg.proof_line:
         lines.append("👥 " + html.escape(cfg.proof_line, quote=False))
+    if cfg.frequency_line:
+        lines.append("✅ " + html.escape(cfg.frequency_line, quote=False))
     return "".join("\n" + x for x in lines)
 
 
@@ -152,11 +161,13 @@ async def save_phone(message: Message, state: FSMContext, cfg: Config, db: Datab
         club=None,
         phone=e164,
         consent_at=data.get("consent_at"),
-        consent_version=T.CONSENT_VERSION,
+        consent_version=T.consent_version(cfg.disclaimer),
     )
     spawn(post_webhook(cfg, lead))
     await state.clear()
-    await message.answer(T.DONE.format(phone=pretty_phone(e164), brand=brand_name(cfg)),
+    done = T.DONE_FULL if cfg.disclaimer == "full" else T.DONE_SHORT
+    bonus = T.BONUS_BLOCK.format(url=html.escape(cfg.bonus_url, quote=True)) if cfg.bonus_url else ""
+    await message.answer(done.format(phone=pretty_phone(e164), brand=brand_name(cfg), bonus=bonus),
                          reply_markup=ReplyKeyboardRemove())
     await message.answer(T.ASK_CLUB, reply_markup=kb_clubs(cfg))
 
@@ -166,7 +177,7 @@ async def save_phone(message: Message, state: FSMContext, cfg: Config, db: Datab
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext, cfg: Config):
     await state.clear()
     await state.update_data(payload=clean_payload(command.args))
-    await message.answer(welcome_text(cfg), reply_markup=kb_age(),
+    await message.answer(welcome_text(cfg), reply_markup=kb_age(cfg),
                          link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 

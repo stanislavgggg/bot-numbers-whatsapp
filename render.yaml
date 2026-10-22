@@ -29,6 +29,8 @@ services:
         value: Apuestas Guru
       - key: PRIVACY_URL
         value: https://espack.lovable.app/privacidad
+      - key: DISCLAIMER
+        value: short
       - key: CHANNEL_URL
         value: https://t.me/ApuestasGuruES
       - key: GSHEET_ID

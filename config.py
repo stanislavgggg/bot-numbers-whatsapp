@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import texts as T
+
 
 def _ids(raw: str) -> set[int]:
     return {int(x) for x in raw.replace(" ", "").split(",") if x.strip().lstrip("-").isdigit()}
@@ -17,6 +19,14 @@ def _https(raw: str) -> str:
     if raw.startswith(("http://", "https://", "tg://")):
         return raw
     return "https://" + raw
+
+
+def _line(name: str, default: str) -> str:
+    """Env text with a built-in default; set it to '-' (or off/none) to switch the line off."""
+    raw = os.environ.get(name, "").strip()
+    if raw.lower() in ("-", "off", "none"):
+        return ""
+    return raw or default
 
 
 def _service_account(raw_json: str, path: str) -> str:
@@ -36,7 +46,10 @@ class Config:
     privacy_url: str = ""          # link to the privacy policy shown in the disclaimer
     brand_name: str = ""           # who sends the WhatsApp messages (default: Apuestas Guru)
     channel_url: str = ""          # optional: public channel button shown after signup
+    disclaimer: str = "short"      # "short" (one consent line) or "full" (long legal block); see texts.py
     frequency_line: str = ""       # optional trust line, e.g. "Máximo 3 mensajes por semana" (must match reality)
+    results_line: str = ""         # e.g. monthly balance of the channel (real, with its caveat); default in texts.py
+    bonus_url: str = ""            # link of the separate deposit offer; empty = the bonus block is not shown
     proof_line: str = ""           # optional social proof, e.g. "Más de 2.000 aficionados ya lo reciben" (only if true)
     webhook_url: str = ""          # optional: every new lead is POSTed here (Make.com, Zapier, Sheets script)
     webhook_secret: str = ""       # optional: sent as X-Webhook-Secret header
@@ -63,8 +76,11 @@ def load_config() -> Config:
         privacy_url=_https(os.environ.get("PRIVACY_URL", "")),
         brand_name=os.environ.get("BRAND_NAME", "").strip(),
         channel_url=_https(os.environ.get("CHANNEL_URL", "")),
+        disclaimer="full" if os.environ.get("DISCLAIMER", "short").strip().lower() == "full" else "short",
         frequency_line=os.environ.get("FREQUENCY_LINE", "").strip(),
-        proof_line=os.environ.get("PROOF_LINE", "").strip(),
+        proof_line=_line("PROOF_LINE", T.DEFAULT_PROOF_LINE),
+        results_line=_line("RESULTS_LINE", T.DEFAULT_RESULTS_LINE),
+        bonus_url=_https(os.environ.get("BONUS_URL", "")),
         webhook_url=os.environ.get("WEBHOOK_URL", "").strip(),
         webhook_secret=os.environ.get("WEBHOOK_SECRET", "").strip(),
         db_path=os.environ.get("DB_PATH", "data/leads.db").strip(),

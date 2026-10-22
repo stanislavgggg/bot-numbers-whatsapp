@@ -93,3 +93,31 @@ def test_config_url_and_secret_file(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", str(key))
     monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
     assert config.load_config().google_sa_json == '{"a": 1}'
+
+
+def test_disclaimer_env(monkeypatch):
+    import config
+    monkeypatch.setenv("BOT_TOKEN", "1:x")
+    monkeypatch.delenv("DISCLAIMER", raising=False)
+    assert config.load_config().disclaimer == "short"
+    monkeypatch.setenv("DISCLAIMER", "FULL")
+    assert config.load_config().disclaimer == "full"
+    monkeypatch.setenv("DISCLAIMER", "whatever")
+    assert config.load_config().disclaimer == "short"
+
+
+def test_proof_defaults_and_switch_off(monkeypatch):
+    import config, texts
+    monkeypatch.setenv("BOT_TOKEN", "1:x")
+    for k in ("PROOF_LINE", "RESULTS_LINE", "BONUS_URL"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = config.load_config()
+    assert cfg.proof_line == texts.DEFAULT_PROOF_LINE and "+2.800" in cfg.proof_line
+    assert "+572" in cfg.results_line and "no auditado" in cfg.results_line     # the number never travels without its caveat
+    assert cfg.bonus_url == ""                                                    # the bonus is off until a link is given
+    monkeypatch.setenv("RESULTS_LINE", "-")
+    monkeypatch.setenv("PROOF_LINE", "Más de 3.000 aficionados")
+    monkeypatch.setenv("BONUS_URL", "t.me/ApuestasGuruES/123")
+    cfg = config.load_config()
+    assert cfg.results_line == "" and cfg.proof_line == "Más de 3.000 aficionados"
+    assert cfg.bonus_url == "https://t.me/ApuestasGuruES/123"
