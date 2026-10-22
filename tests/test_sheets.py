@@ -119,3 +119,27 @@ def test_db_unsynced_cycle(tmp_path):
         assert await db.unsynced() == []
 
     asyncio.run(run())
+
+
+def test_sync_loop_pushes_updates_and_deletes(tmp_path):
+    """The real background loop (as started in main): new lead, club update, /borrar all reach the sheet once."""
+    import bot as botmod
+
+    async def run():
+        cfg = Config(bot_token="1:x", sync_interval=0.05, sheet_tz="Europe/Madrid")
+        db = Database(str(tmp_path / "l.db"))
+        ws = FakeWS(HEADERS)
+        task = botmod.spawn(botmod.sync_loop(cfg, db, SheetSink(ws, cfg, "mybot")))
+        await db.save_lead(tg_id=1, username="u", first_name="A", payload="A1", club=None,
+                           phone="+34612345678", consent_version="es-tg-v3")
+        await asyncio.sleep(0.3)
+        assert len(ws.rows) == 2 and ws.rows[1][HEADERS.index("phone")] == "34612345678"
+        await db.set_club(1, "Barça")
+        await asyncio.sleep(0.3)
+        assert len(ws.rows) == 2 and ws.rows[1][HEADERS.index("club")] == "barca"   # same row, no duplicate
+        await db.delete(1)
+        await asyncio.sleep(0.3)
+        assert len(ws.rows) == 1                                                     # row removed
+        task.cancel()
+
+    asyncio.run(run())

@@ -2,7 +2,7 @@ import asyncio
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -113,9 +113,9 @@ class Database:
     def _stats(self) -> dict:
         with self._conn() as c:
             total = c.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
-            day = c.execute(
-                "SELECT COUNT(*) FROM leads WHERE created_at >= datetime('now','-1 day')"
-            ).fetchone()[0]
+            # created_at is stored as ISO-8601 with 'T'; compare against a cutoff in the same format
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+            day = c.execute("SELECT COUNT(*) FROM leads WHERE created_at >= ?", (cutoff,)).fetchone()[0]
             by_payload = c.execute(
                 "SELECT COALESCE(NULLIF(payload,''),'(sin tag)') p, COUNT(*) n FROM leads GROUP BY p ORDER BY n DESC LIMIT 20"
             ).fetchall()

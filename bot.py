@@ -1,14 +1,18 @@
 import asyncio
+import contextlib
 import csv
 import html
 import io
 import logging
+import os
+import re
 from datetime import datetime, timezone
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -19,6 +23,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    LinkPreviewOptions,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
@@ -36,6 +41,29 @@ router = Router()
 
 class Flow(StatesGroup):
     phone = State()
+
+
+_tasks: set[asyncio.Task] = set()
+
+
+def spawn(coro) -> asyncio.Task:
+    """create_task that keeps a strong reference (the event loop only holds weak ones, so a task can vanish mid-flight)."""
+    t = asyncio.create_task(coro)
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return t
+
+
+def clean_payload(raw: str | None) -> str:
+    """Deep-link tag: only A-Za-z0-9_- (what Telegram itself allows), max 64. Typed '/start <b>x' cannot break HTML or the sheet."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw or "")[:64]
+
+
+def csv_safe(col: str, value):
+    """Stop spreadsheet formula injection in /export (a Telegram first_name can be '=HYPERLINK(...)'). Phone is validated E.164."""
+    if col != "phone" and isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 # ---------- keyboards ----------
@@ -70,12 +98,13 @@ def kb_phone() -> ReplyKeyboardMarkup:
 
 # ---------- helpers ----------
 def welcome_text(cfg: Config) -> str:
-    privacy = T.PRIVACY_LINE.format(url=cfg.privacy_url) if cfg.privacy_url else ""
+    privacy = T.PRIVACY_LINE.format(url=html.escape(cfg.privacy_url, quote=True)) if cfg.privacy_url else ""
     return T.WELCOME.format(brand=brand_name(cfg), privacy=privacy, trust_extra=trust_extra(cfg))
 
 
 def brand_name(cfg: Config) -> str:
-    return cfg.brand_name or T.BRAND_FALLBACK
+    """HTML-escaped: used only inside Telegram HTML messages (a bare '&' or '<' would make Telegram reject the message)."""
+    return html.escape(cfg.brand_name or T.BRAND_FALLBACK, quote=False)
 
 
 def trust_extra(cfg: Config) -> str:
@@ -125,7 +154,7 @@ async def save_phone(message: Message, state: FSMContext, cfg: Config, db: Datab
         consent_at=data.get("consent_at"),
         consent_version=T.CONSENT_VERSION,
     )
-    asyncio.create_task(post_webhook(cfg, lead))
+    spawn(post_webhook(cfg, lead))
     await state.clear()
     await message.answer(T.DONE.format(phone=pretty_phone(e164), brand=brand_name(cfg)),
                          reply_markup=ReplyKeyboardRemove())
@@ -136,8 +165,9 @@ async def save_phone(message: Message, state: FSMContext, cfg: Config, db: Datab
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext, cfg: Config):
     await state.clear()
-    await state.update_data(payload=(command.args or "")[:64])
-    await message.answer(welcome_text(cfg), reply_markup=kb_age(), disable_web_page_preview=True)
+    await state.update_data(payload=clean_payload(command.args))
+    await message.answer(welcome_text(cfg), reply_markup=kb_age(),
+                         link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 
 @router.callback_query(F.data == "age:no")
@@ -149,9 +179,13 @@ async def age_no(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "age:yes")
 async def accept(cb: CallbackQuery, state: FSMContext):
+    if await state.get_state() == Flow.phone.state:  # double tap: already asked, keep the first consent time
+        await cb.answer()
+        return
     # Explicit opt-in: the tap is the consent; its time is stored with the lead.
     await state.update_data(consent_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    await cb.message.edit_reply_markup(reply_markup=None)
+    with contextlib.suppress(TelegramBadRequest):
+        await cb.message.edit_reply_markup(reply_markup=None)
     await ask_phone(cb.message, state)
     await cb.answer()
 
@@ -169,12 +203,20 @@ async def phone_text(message: Message, state: FSMContext, cfg: Config, db: Datab
     await save_phone(message, state, cfg, db, message.text)
 
 
+@router.message(Flow.phone, ~F.text)
+async def phone_other(message: Message):
+    await message.answer(T.ASK_PHONE, reply_markup=kb_phone())
+
+
 @router.callback_query(F.data.startswith("club:"))
 async def club_chosen(cb: CallbackQuery, cfg: Config, db: Database):
     name = T.CLUBS.get(cb.data.split(":", 1)[1], "Otro equipo")
     lead = await db.set_club(cb.from_user.id, name)
-    if lead:
-        asyncio.create_task(post_webhook(cfg, lead))
+    if not lead:  # data was deleted with /borrar, or an old button
+        await cb.message.edit_text(T.FALLBACK)
+        await cb.answer()
+        return
+    spawn(post_webhook(cfg, lead))
     await cb.message.edit_text(T.CLUB_THANKS.format(club=name), reply_markup=kb_channel(cfg))
     await cb.answer()
 
@@ -213,9 +255,9 @@ async def cmd_stats(message: Message, cfg: Config, db: Database):
         return
     s = await db.stats()
     lines = [f"📊 <b>Leads</b>: {s['total']} (últimas 24 h: {s['last_24h']})", "", "<b>Por tag (?start=…)</b>"]
-    lines += [f"• {p}: {n}" for p, n in s["by_payload"]] or ["—"]
+    lines += [f"• {html.escape(str(p), quote=False)}: {n}" for p, n in s["by_payload"]] or ["—"]
     lines += ["", "<b>Por equipo</b>"]
-    lines += [f"• {k}: {n}" for k, n in s["by_club"]] or ["—"]
+    lines += [f"• {html.escape(str(k), quote=False)}: {n}" for k, n in s["by_club"]] or ["—"]
     await message.answer("\n".join(lines))
 
 
@@ -227,7 +269,7 @@ async def cmd_export(message: Message, cfg: Config, db: Database):
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=COLUMNS, extrasaction="ignore")  # skip internal rev/synced
     w.writeheader()
-    w.writerows(rows)
+    w.writerows([{k: csv_safe(k, v) for k, v in r.items()} for r in rows])
     data = buf.getvalue().encode("utf-8-sig")  # BOM so Excel opens UTF-8 correctly
     await message.answer_document(BufferedInputFile(data, filename="leads.csv"), caption=f"{len(rows)} leads")
 
@@ -256,6 +298,9 @@ async def sync_loop(cfg: Config, db: Database, sink: SheetSink) -> None:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = load_config()
+    if os.environ.get("RENDER") and not os.path.ismount(os.path.dirname(os.path.abspath(cfg.db_path))):
+        log.warning("DB_PATH=%s is not on a persistent disk: SQLite is wiped on every deploy/restart "
+                    "(attach a Disk and set DB_PATH=/var/data/leads.db)", cfg.db_path)
     db = Database(cfg.db_path)
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage(), cfg=cfg, db=db)
@@ -266,7 +311,7 @@ async def main() -> None:
     if cfg.gsheet_id and cfg.google_sa_json:
         # fail loudly at startup if the sheet is not reachable / not shared with the service account
         sink = await asyncio.to_thread(SheetSink.connect, cfg, username)
-        asyncio.create_task(sync_loop(cfg, db, sink))
+        spawn(sync_loop(cfg, db, sink))
         log.info("Google Sheets sync enabled")
     else:
         log.warning("GSHEET_ID / GOOGLE_SERVICE_ACCOUNT_JSON not set: leads are stored in SQLite only")

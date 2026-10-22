@@ -50,3 +50,46 @@ def test_db_roundtrip(tmp_path):
         assert (await db.stats())["total"] == 1
 
     asyncio.run(run())
+
+
+def test_phone_only_mobiles():
+    # WhatsApp lives on mobile lines: landline (91x), toll-free (800) are rejected
+    assert normalize_phone("912345678") is None
+    assert normalize_phone("800123456") is None
+    assert normalize_phone("711223344") == "+34711223344"   # 7xx mobiles are valid too
+    assert normalize_phone("+44 7911 123456") == "+447911123456"
+    assert normalize_phone("+370 612 34567") == "+37061234567"
+
+
+def test_stats_last_24h_uses_real_cutoff(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    db = Database(str(tmp_path / "s.db"))
+
+    async def run():
+        await db.save_lead(tg_id=1, username="u", first_name="A", payload="", club=None,
+                           phone="+34612345678", consent_version="v")
+        await db.save_lead(tg_id=2, username="u", first_name="B", payload="", club=None,
+                           phone="+34611111111", consent_version="v")
+        old = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat(timespec="seconds")
+        with db._conn() as c:
+            c.execute("UPDATE leads SET created_at=? WHERE tg_id=1", (old,))
+        s = await db.stats()
+        assert s["total"] == 2 and s["last_24h"] == 1     # the 30-hour-old lead must not count
+
+    asyncio.run(run())
+
+
+def test_config_url_and_secret_file(tmp_path, monkeypatch):
+    import config
+    assert config._https("@MiCanal") == "https://t.me/MiCanal"
+    assert config._https("t.me/MiCanal") == "https://t.me/MiCanal"
+    assert config._https("example.com/privacidad") == "https://example.com/privacidad"
+    assert config._https("https://x.y") == "https://x.y" and config._https("") == ""
+    key = tmp_path / "sa.json"
+    key.write_text('{"a": 1}\n')
+    assert config._service_account("", str(key)) == '{"a": 1}'
+    assert config._service_account('{"b": 2}', str(key)) == '{"b": 2}'   # the env JSON wins
+    monkeypatch.setenv("BOT_TOKEN", "1:x")
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_FILE", str(key))
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)
+    assert config.load_config().google_sa_json == '{"a": 1}'

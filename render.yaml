@@ -1,0 +1,50 @@
+# Render Blueprint: New + Blueprint, pick this repo. The bot uses long polling, so it is a Background Worker
+# (no port, no health check). Workers and disks are paid-only on Render (no free instance type).
+services:
+  - type: worker
+    name: phone-lead-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: frankfurt          # EU, closest to Spanish users (GDPR)
+    autoDeploy: true
+    # SQLite lives here. Without a disk it is wiped on every deploy. A disk means ONE instance
+    # and a few seconds of downtime per deploy (old instance stops before the new one starts, so no polling conflicts).
+    disk:
+      name: leads-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # --- secrets: Render asks for them when the Blueprint is created ---
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      # --- fixed values (edit if needed) ---
+      - key: DB_PATH
+        value: /var/data/leads.db
+      - key: BRAND_NAME
+        value: Apuestas Guru
+      - key: PRIVACY_URL
+        value: https://espack.lovable.app/privacidad
+      - key: CHANNEL_URL
+        value: https://t.me/ApuestasGuruES
+      - key: GSHEET_ID
+        value: 1KjBIBYaL5L5ntsoQDiBAMGRrBLDNSzGHMT7GGn_JY-U
+      - key: GSHEET_GID
+        value: "1091185446"
+      - key: QUIZ_ID
+        value: es_whatsapp_tgbot
+      - key: UTM_SOURCE
+        value: telegram
+      - key: DEFAULT_REGION
+        value: ES
+      - key: SHEET_TZ
+        value: Europe/Madrid
+      - key: SYNC_INTERVAL
+        value: "10"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Optional, add in the Dashboard if needed: UTM_MEDIUM, FREQUENCY_LINE, PROOF_LINE, WEBHOOK_URL, WEBHOOK_SECRET

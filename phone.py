@@ -1,5 +1,8 @@
 import phonenumbers
 
+# WhatsApp needs a mobile line: landlines (91x...), toll-free (800...) and premium numbers are useless leads.
+_MOBILE_TYPES = {phonenumbers.PhoneNumberType.MOBILE, phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE}
+
 
 def normalize_phone(raw: str, region: str = "ES") -> str | None:
     """Return the number in E.164 (+34612345678) or None if it is not a valid number."""
@@ -15,7 +18,7 @@ def normalize_phone(raw: str, region: str = "ES") -> str | None:
         num = phonenumbers.parse(raw, region)
     except phonenumbers.NumberParseException:
         return None
-    if not phonenumbers.is_valid_number(num):
+    if not phonenumbers.is_valid_number(num) or phonenumbers.number_type(num) not in _MOBILE_TYPES:
         return None
     return phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.E164)
 

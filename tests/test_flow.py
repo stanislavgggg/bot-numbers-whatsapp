@@ -17,6 +17,17 @@ from config import Config  # noqa: E402
 from db import Database  # noqa: E402
 
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _detach_router():
+    """The module-level router can be attached to one Dispatcher at a time; every test builds its own."""
+    botmod.router._parent_router = None
+    yield
+    botmod.router._parent_router = None
+
+
 class FakeSession(BaseSession):
     def __init__(self):
         super().__init__()
@@ -133,3 +144,75 @@ def test_welcome_has_balanced_html_tags():
     for tag in ("b", "i", "blockquote", "a"):
         assert len(re.findall(rf"<{tag}[ >]", text)) == len(re.findall(rf"</{tag}>", text)), tag
     assert len(text) < 3500   # Telegram hard limit is 4096
+
+
+def _setup(tmp_path, **kw):
+    cfg = Config(bot_token="1:x", admin_ids={42}, db_path=str(tmp_path / "x.db"), **kw)
+    db = Database(cfg.db_path)
+    session = FakeSession()
+    bot = Bot("1:AAA", session=session)
+    dp = Dispatcher(storage=MemoryStorage(), cfg=cfg, db=db)
+    dp.include_router(botmod.router)
+    return cfg, db, session, bot, dp
+
+
+def test_payload_is_sanitized_and_stats_survive(tmp_path):
+    async def run():
+        cfg, db, session, bot, dp = _setup(tmp_path)
+        feed = lambda u: dp.feed_update(bot, u)
+        await feed(msg(1, "/start <b>evil</b>&x"))
+        await feed(cbq(2, "age:yes"))
+        await feed(msg(3, "612 345 678"))
+        lead = (await db.all_leads())[0]
+        assert lead["payload"] == "bevilbx"                  # only A-Za-z0-9_- survive
+        assert botmod.clean_payload("A1__spring__k" + "x" * 80) .startswith("A1__spring__k") \
+            and len(botmod.clean_payload("x" * 80)) == 64
+        await feed(msg(4, "/stats"))                         # must not raise on HTML parsing
+    asyncio.run(run())
+
+
+def test_brand_is_html_escaped_in_messages(tmp_path):
+    cfg = Config(bot_token="1:x", brand_name="Guru & Co <b>")
+    assert "Guru &amp; Co &lt;b&gt;" in botmod.welcome_text(cfg)
+    assert botmod.brand_name(cfg) == "Guru &amp; Co &lt;b&gt;"
+    assert cfg.brand_name == "Guru & Co <b>"                 # the sheet still gets the raw name
+
+
+def test_double_tap_and_non_text_while_waiting_for_number(tmp_path):
+    async def run():
+        cfg, db, session, bot, dp = _setup(tmp_path)
+        feed = lambda u: dp.feed_update(bot, u)
+        await feed(msg(1, "/start"))
+        await feed(cbq(2, "age:yes"))
+        asks = lambda: sum("Solo falta tu número" in str(d.get("text", "")) for _, d in session.sent)
+        assert asks() == 1
+        await feed(cbq(3, "age:yes"))                        # second tap: no second prompt
+        assert asks() == 1
+        await feed(msg(4))                                   # sticker/photo: asks for the number again
+        assert asks() == 2
+        assert not any(d.get("text") == botmod.T.FALLBACK for _, d in session.sent)
+        await feed(msg(5, "612 345 678"))
+        assert (await db.stats())["total"] == 1
+    asyncio.run(run())
+
+
+def test_stale_club_button_after_delete(tmp_path):
+    async def run():
+        cfg, db, session, bot, dp = _setup(tmp_path)
+        feed = lambda u: dp.feed_update(bot, u)
+        await feed(msg(1, "/start"))
+        await feed(cbq(2, "age:yes"))
+        await feed(msg(3, "612 345 678"))
+        await feed(cbq(4, "del:yes"))
+        await feed(cbq(5, "club:rm"))                        # old button after /borrar: no crash, nothing stored
+        assert (await db.stats())["total"] == 0
+    asyncio.run(run())
+
+
+def test_csv_formula_injection_is_neutralised():
+    assert botmod.csv_safe("first_name", '=HYPERLINK("http://x","y")').startswith("'=")
+    assert botmod.csv_safe("first_name", "@SUM(A1)") == "'@SUM(A1)"
+    assert botmod.csv_safe("first_name", "-2+3") == "'-2+3"
+    assert botmod.csv_safe("first_name", "Stan") == "Stan"
+    assert botmod.csv_safe("phone", "+34612345678") == "+34612345678"   # validated E.164 stays as is
+    assert botmod.csv_safe("consent", 1) == 1
